@@ -46,7 +46,7 @@ namespace System.Transactions
 
             // The head of the list is long.MaxValue.  It contains all of the transactions that for
             // some reason or other don't have a timeout.
-            _headBucketSet = new BucketSet(this, long.MaxValue);
+            _headBucketSet = new BucketSet(long.MaxValue);
 
             // Allocate the lock
             _rwLock = new ReaderWriterLockSlim();
@@ -186,7 +186,7 @@ namespace System.Transactions
                         // because its reference was collected.  This code doesn't care.  Make a new
                         // set, attempt to attach it and move on.
                         //
-                        BucketSet newBucketSet = new BucketSet(this, txNew.AbsoluteTimeout);
+                        BucketSet newBucketSet = new BucketSet(txNew.AbsoluteTimeout);
                         WeakReference<BucketSet> newSetWeak = new WeakReference<BucketSet>(newBucketSet);
 
                         WeakReference<BucketSet>? oldNextSetWeak = Interlocked.CompareExchange(
@@ -213,7 +213,7 @@ namespace System.Transactions
                     //
                     // Getting to here means that we've found a slot in the list where this bucket set should go.
                     //
-                    BucketSet newBucketSet = new BucketSet(this, txNew.AbsoluteTimeout);
+                    BucketSet newBucketSet = new BucketSet(txNew.AbsoluteTimeout);
                     WeakReference<BucketSet> newSetWeak = new WeakReference<BucketSet>(newBucketSet);
 
                     Debug.Assert(lastBucketSet != null);
@@ -425,16 +425,13 @@ namespace System.Transactions
         internal WeakReference<BucketSet>? nextSetWeak;
         internal BucketSet? prevSet;
 
-        private readonly TransactionTable _table;
-
         private readonly long _absoluteTimeout;
 
         internal Bucket headBucket;
 
-        internal BucketSet(TransactionTable table, long absoluteTimeout)
+        internal BucketSet(long absoluteTimeout)
         {
             headBucket = new Bucket(this);
-            _table = table;
             _absoluteTimeout = absoluteTimeout;
         }
 
