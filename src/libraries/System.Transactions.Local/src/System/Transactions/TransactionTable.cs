@@ -296,10 +296,9 @@ namespace System.Transactions
             BucketSet? lastBucketSet;
             BucketSet currentBucketSet = _headBucketSet; // The list always has a head.
 
-            WeakReference<BucketSet>? nextWeakSet;
+            WeakReference<BucketSet>? nextWeakSet = currentBucketSet.nextSetWeak;
             BucketSet? nextBucketSet = null;
 
-            nextWeakSet = currentBucketSet.nextSetWeak;
             if (nextWeakSet != null)
             {
                 nextWeakSet.TryGetTarget(out nextBucketSet);
