@@ -18,7 +18,7 @@ namespace System.Transactions
 
         // Store the timer interval
         private const int timerInternalExponent = 9;
-        private readonly int _timerInterval;
+        private const int timerInterval = 1 << timerInternalExponent;
 
         // Store the number of ticks.  A tick is a mark of 1 timer interval.  By counting ticks
         // we can avoid expensive calls to get the current time for every transaction creation.
@@ -36,13 +36,10 @@ namespace System.Transactions
         internal TransactionTable()
         {
             // Create a timer that is initially disabled by specifing an Infinite time to the first interval
-            _timer = new Timer(new TimerCallback(ThreadTimer), null, Timeout.Infinite, _timerInterval);
+            _timer = new Timer(new TimerCallback(ThreadTimer), null, Timeout.Infinite, timerInterval);
 
             // Note that the timer is disabled
             _timerEnabled = false;
-
-            // Store the timer interval
-            _timerInterval = 1 << TransactionTable.timerInternalExponent;
 
             // Ticks start off at zero.
             _ticks = 0;
@@ -87,7 +84,7 @@ namespace System.Transactions
         // Absolute timeout
         internal TimeSpan RecalcTimeout(InternalTransaction tx)
         {
-            return TimeSpan.FromMilliseconds((tx.AbsoluteTimeout - _ticks) * _timerInterval);
+            return TimeSpan.FromMilliseconds((tx.AbsoluteTimeout - _ticks) * timerInterval);
         }
 
 
@@ -124,7 +121,7 @@ namespace System.Transactions
                 {
                     if (!_timerEnabled)
                     {
-                        if (!_timer.Change(_timerInterval, _timerInterval))
+                        if (!_timer.Change(timerInterval, timerInterval))
                         {
                             throw TransactionException.CreateInvalidOperationException(
                                 TraceSourceType.TraceSourceLtm,
