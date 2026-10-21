@@ -296,10 +296,6 @@ namespace System.Transactions
             BucketSet? lastBucketSet;
             BucketSet currentBucketSet = _headBucketSet; // The list always has a head.
 
-            // Acquire a writer lock before checking to see if we should disable the timer.
-            // Adding of transactions acquires a reader lock and might insert a new BucketSet.
-            // If that races with our check for a BucketSet existing, we may not timeout that
-            // transaction that is being added.
             WeakReference<BucketSet>? nextWeakSet;
             BucketSet? nextBucketSet = null;
 
@@ -309,42 +305,9 @@ namespace System.Transactions
                 nextWeakSet.TryGetTarget(out nextBucketSet);
             }
 
-            if (nextBucketSet == null)
+            if (nextBucketSet == null && TryDisableTimer())
             {
-                _rwLock.EnterWriteLock();
-                try
-                {
-                    // Access the nextBucketSet again in writer lock to account for any race before disabling the timeout.
-                    nextWeakSet = currentBucketSet.nextSetWeak;
-                    if (nextWeakSet != null)
-                    {
-                        nextWeakSet.TryGetTarget(out nextBucketSet);
-                    }
-
-                    if (nextBucketSet == null)
-                    {
-                        //
-                        // Special case to allow for disabling the timer.
-                        //
-                        // If there are no transactions on the timeout list we can disable the
-                        // timer.
-                        if (!_timer.Change(Timeout.Infinite, Timeout.Infinite))
-                        {
-                            throw TransactionException.CreateInvalidOperationException(
-                                TraceSourceType.TraceSourceLtm,
-                                SR.UnexpectedTimerFailure,
-                                null
-                                );
-                        }
-                        _timerEnabled = false;
-
-                        return;
-                    }
-                }
-                finally
-                {
-                    _rwLock.ExitWriteLock();
-                }
+                return;
             }
 
             // Note it is slightly subtle that we always skip the head node.  This is done
@@ -415,6 +378,53 @@ namespace System.Transactions
                 currentBucketSet = lastBucketSet;
             }
             while (true);
+        }
+
+
+        // Disable the timer if there are no transactions on the timeout list
+        private bool TryDisableTimer()
+        {
+            // Acquire a writer lock before checking to see if we should disable the timer.
+            // Adding of transactions acquires a reader lock and might insert a new BucketSet.
+            // If that races with our check for a BucketSet existing, we may not timeout that
+            // transaction that is being added.
+            _rwLock.EnterWriteLock();
+            try
+            {
+                // Access the nextBucketSet again in writer lock to account for any race before disabling the timeout.
+                WeakReference<BucketSet>? nextWeakSet = _headBucketSet.nextSetWeak;
+                BucketSet? nextBucketSet = null;
+                if (nextWeakSet != null)
+                {
+                    nextWeakSet.TryGetTarget(out nextBucketSet);
+                }
+
+                if (nextBucketSet == null)
+                {
+                    //
+                    // Special case to allow for disabling the timer.
+                    //
+                    // If there are no transactions on the timeout list we can disable the
+                    // timer.
+                    if (!_timer.Change(Timeout.Infinite, Timeout.Infinite))
+                    {
+                        throw TransactionException.CreateInvalidOperationException(
+                            TraceSourceType.TraceSourceLtm,
+                            SR.UnexpectedTimerFailure,
+                            null
+                            );
+                    }
+                    _timerEnabled = false;
+
+                    return true;
+                }
+            }
+            finally
+            {
+                _rwLock.ExitWriteLock();
+            }
+
+            return false;
         }
     }
 
