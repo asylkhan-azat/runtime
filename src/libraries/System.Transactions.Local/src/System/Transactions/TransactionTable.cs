@@ -30,6 +30,9 @@ namespace System.Transactions
         // Sets of arrays of transactions.
         private readonly BucketSet _headBucketSet;
 
+        // Serializes inserting new sets into the list.
+        private readonly Lock _insertLock = new Lock();
+
         // Synchronize adding transactions with shutting off the timer and started events.
         private readonly ReaderWriterLockSlim _rwLock;
 
@@ -164,105 +167,83 @@ namespace System.Transactions
             // chain that link won't fall off the list because there is a strong reference held
             // forward.
             //
+            // This only works if every set in the middle of the list is held by the set after it.
+            // Otherwise an empty set can be collected and cut off the sets after it, which then
+            // never time out.  So finding an existing set is lock-free, but new sets are inserted
+            // under a lock, which keeps inserts from overwriting each other's prevSet links.
+            //
 
-            BucketSet currentBucketSet = _headBucketSet;
-
-            while (currentBucketSet.AbsoluteTimeout != txNew.AbsoluteTimeout)
-            {
-                (BucketSet? lastBucketSet, currentBucketSet) = FindBucketSet(currentBucketSet, txNew.AbsoluteTimeout);
-
-                if (currentBucketSet.AbsoluteTimeout != txNew.AbsoluteTimeout)
-                {
-                    //
-                    // Getting to here means that we've found a slot in the list where this bucket set should go.
-                    //
-                    BucketSet newBucketSet = new BucketSet(txNew.AbsoluteTimeout);
-                    WeakReference<BucketSet> newSetWeak = new WeakReference<BucketSet>(newBucketSet);
-
-                    Debug.Assert(lastBucketSet != null);
-                    newBucketSet.nextSetWeak = lastBucketSet.nextSetWeak;
-                    WeakReference<BucketSet>? oldNextSetWeak = Interlocked.CompareExchange(
-                        ref lastBucketSet.nextSetWeak, newSetWeak, newBucketSet.nextSetWeak);
-                    if (oldNextSetWeak == newBucketSet.nextSetWeak)
-                    {
-                        // Ladies and Gentlemen we have a winner.
-                        if (oldNextSetWeak != null)
-                        {
-                            oldNextSetWeak.TryGetTarget(out BucketSet? oldSet);
-                            // prev references are just there to root things for the GC.  If this object is
-                            // gone we don't really care.
-                            oldSet?.prevSet = newBucketSet;
-                        }
-                        newBucketSet.prevSet = lastBucketSet;
-                    }
-
-                    // Special note - We are going to loop back to the BucketSet that precedes the one we just tried
-                    // to insert because we may have lost the race to insert our new BucketSet into the list to another
-                    // "Add" thread. By looping back, we check again to see if the BucketSet we just created actually
-                    // got added. If it did, we will exit out of the outer loop and add the transaction. But if we
-                    // lost the race, we will again try to add a new BucketSet. In the latter case, the BucketSet
-                    // we created during the first iteration will simply be Garbage Collected because there are no
-                    // strong references to it since we never added the transaction to a bucket and the act of
-                    // creating the second BucketSet with remove the backward reference that was created in the
-                    // first trip thru the loop.
-                    currentBucketSet = lastBucketSet;
-
-                    // The outer loop will iterate and pick up where we left off.
-                }
-            }
+            BucketSet bucketSet = FindBucketSet(txNew.AbsoluteTimeout) ?? InsertBucketSet(txNew.AbsoluteTimeout);
 
             //
             // Great we found a spot.
             //
-            currentBucketSet.Add(txNew);
+            bucketSet.Add(txNew);
         }
 
 
-        // Walk down the list from startBucketSet to the first set whose absolute timeout is not later than
-        // absoluteTimeout, appending a new set if the end of the list is reached first.
-        private static (BucketSet? lastBucketSet, BucketSet currentBucketSet) FindBucketSet(BucketSet startBucketSet, long absoluteTimeout)
+        // Walk down the list to the set with the given absolute timeout.  Returns null if there is no such set.
+        private BucketSet? FindBucketSet(long absoluteTimeout)
         {
-            BucketSet? lastBucketSet = null;
-            BucketSet currentBucketSet = startBucketSet;
-            do
+            BucketSet currentBucketSet = _headBucketSet;
+            while (currentBucketSet.AbsoluteTimeout > absoluteTimeout)
             {
                 WeakReference<BucketSet>? nextSetWeak = currentBucketSet.nextSetWeak;
-                BucketSet? nextBucketSet = null;
-                if (nextSetWeak != null)
+                if (nextSetWeak == null || !nextSetWeak.TryGetTarget(out BucketSet? nextBucketSet))
                 {
-                    nextSetWeak.TryGetTarget(out nextBucketSet);
-                }
-
-                if (nextBucketSet == null)
-                {
-                    //
                     // We've reached the end of the list either because nextSetWeak was null or
-                    // because its reference was collected.  This code doesn't care.  Make a new
-                    // set, attempt to attach it and move on.
-                    //
-                    BucketSet newBucketSet = new BucketSet(absoluteTimeout);
-                    WeakReference<BucketSet> newSetWeak = new WeakReference<BucketSet>(newBucketSet);
+                    // because its reference was collected.
+                    return null;
+                }
+                currentBucketSet = nextBucketSet;
+            }
 
-                    WeakReference<BucketSet>? oldNextSetWeak = Interlocked.CompareExchange(
-                        ref currentBucketSet.nextSetWeak, newSetWeak, nextSetWeak);
-                    if (oldNextSetWeak == nextSetWeak)
+            return currentBucketSet.AbsoluteTimeout == absoluteTimeout ? currentBucketSet : null;
+        }
+
+
+        // Insert a new set with the given absolute timeout into the list, or return the existing one
+        // if another thread inserted it first.
+        private BucketSet InsertBucketSet(long absoluteTimeout)
+        {
+            lock (_insertLock)
+            {
+                while (true)
+                {
+                    // Find the slot between lastBucketSet and nextBucketSet where the new set goes.  A null
+                    // or collected link is the end of the list.
+                    BucketSet lastBucketSet = _headBucketSet;
+                    WeakReference<BucketSet>? nextSetWeak = lastBucketSet.nextSetWeak;
+                    BucketSet? nextBucketSet = null;
+                    nextSetWeak?.TryGetTarget(out nextBucketSet);
+                    while (nextBucketSet != null && nextBucketSet.AbsoluteTimeout > absoluteTimeout)
                     {
-                        // Ladies and Gentlemen we have a winner.
-                        newBucketSet.prevSet = currentBucketSet;
+                        lastBucketSet = nextBucketSet;
+                        nextSetWeak = lastBucketSet.nextSetWeak;
+                        nextBucketSet = null;
+                        nextSetWeak?.TryGetTarget(out nextBucketSet);
                     }
 
-                    // Note that at this point we don't update currentBucketSet.  On the next loop
-                    // iteration we should be able to pick up where we left off.
-                }
-                else
-                {
-                    lastBucketSet = currentBucketSet;
-                    currentBucketSet = nextBucketSet;
+                    if (nextBucketSet != null && nextBucketSet.AbsoluteTimeout == absoluteTimeout)
+                    {
+                        return nextBucketSet;
+                    }
+
+                    // If the link was collected, everything after it is gone too, so the new set ends the list.
+                    BucketSet newBucketSet = new BucketSet(absoluteTimeout);
+                    newBucketSet.nextSetWeak = nextBucketSet != null ? nextSetWeak : null;
+                    newBucketSet.prevSet = lastBucketSet;
+
+                    // Outside of this lock only the timer changes the links, when it pinches off the list.
+                    // If it pinched it off at lastBucketSet, walk again.
+                    if (Interlocked.CompareExchange(
+                        ref lastBucketSet.nextSetWeak, new WeakReference<BucketSet>(newBucketSet), nextSetWeak) == nextSetWeak)
+                    {
+                        nextBucketSet?.prevSet = newBucketSet;
+                        return newBucketSet;
+                    }
                 }
             }
-            while (currentBucketSet.AbsoluteTimeout > absoluteTimeout);
-
-            return (lastBucketSet, currentBucketSet);
         }
 
 
