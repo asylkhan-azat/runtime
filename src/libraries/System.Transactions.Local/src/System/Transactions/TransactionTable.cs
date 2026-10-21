@@ -479,9 +479,9 @@ namespace System.Transactions
 
     internal sealed class Bucket
     {
+        private const int size = 1024; // A possible design change here is to have this scale dynamically based on load.
         private bool _timedOut;
         private int _index;
-        private readonly int _size;
         private readonly InternalTransaction?[] _transactions;
         internal WeakReference<Bucket>? nextBucketWeak;
         private Bucket? _previous;
@@ -492,8 +492,7 @@ namespace System.Transactions
         {
             _timedOut = false;
             _index = -1;
-            _size = 1024; // A possible design change here is to have this scale dynamically based on load.
-            _transactions = new InternalTransaction[_size];
+            _transactions = new InternalTransaction[size];
             _owningSet = owningSet;
         }
 
@@ -501,7 +500,7 @@ namespace System.Transactions
         internal bool Add(InternalTransaction tx)
         {
             int currentIndex = Interlocked.Increment(ref _index);
-            if (currentIndex < _size)
+            if (currentIndex < size)
             {
                 tx._tableBucket = this;
                 tx._bucketIndex = currentIndex;
@@ -549,7 +548,7 @@ namespace System.Transactions
             _timedOut = true;
             Interlocked.MemoryBarrier();
 
-            for (i = 0; i <= transactionCount && i < _size; i++)
+            for (i = 0; i <= transactionCount && i < size; i++)
             {
                 Debug.Assert(transactionCount == _index, "Index changed timing out transactions");
                 InternalTransaction? tx = _transactions[i];
