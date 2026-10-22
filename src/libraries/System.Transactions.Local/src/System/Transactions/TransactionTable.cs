@@ -206,6 +206,7 @@ namespace System.Transactions
         // if another thread inserted it first.
         private BucketSet InsertBucketSet(long absoluteTimeout)
         {
+            BucketSet newBucketSet;
             lock (_insertLock)
             {
                 while (true)
@@ -230,7 +231,7 @@ namespace System.Transactions
                     }
 
                     // If the link was collected, everything after it is gone too, so the new set ends the list.
-                    BucketSet newBucketSet = new BucketSet(absoluteTimeout);
+                    newBucketSet = new BucketSet(absoluteTimeout);
                     newBucketSet.nextSetWeak = nextBucketSet != null ? nextSetWeak : null;
                     newBucketSet.prevSet = lastBucketSet;
 
@@ -240,10 +241,23 @@ namespace System.Transactions
                         ref lastBucketSet.nextSetWeak, new WeakReference<BucketSet>(newBucketSet), nextSetWeak) == nextSetWeak)
                     {
                         nextBucketSet?.prevSet = newBucketSet;
-                        return newBucketSet;
+
+                        // If the walk went past the timer's pinch, the timer may have already passed lastBucketSet
+                        // without seeing the new set.  It checks the link after timing a set out, so either it
+                        // sees the new set or we see that lastBucketSet timed out.
+                        if (!lastBucketSet.TimedOut)
+                        {
+                            return newBucketSet;
+                        }
+
+                        break;
                     }
                 }
             }
+
+            // Time out the new set ourselves, outside the lock since timing out takes the transaction locks.
+            newBucketSet.TimeoutTransactions();
+            return newBucketSet;
         }
 
 
@@ -428,6 +442,9 @@ namespace System.Transactions
 
         private readonly long _absoluteTimeout;
 
+        // Set once the set's transactions are being timed out.  Adds that see it time out their own transaction.
+        private bool _timedOut;
+
         internal Bucket headBucket;
 
         internal BucketSet(long absoluteTimeout)
@@ -446,6 +463,15 @@ namespace System.Transactions
         }
 
 
+        internal bool TimedOut
+        {
+            get
+            {
+                return _timedOut;
+            }
+        }
+
+
         internal void Add(InternalTransaction newTx)
         {
             while (!headBucket.Add(newTx)) ;
@@ -454,6 +480,11 @@ namespace System.Transactions
 
         internal void TimeoutTransactions()
         {
+            // Set the flag before reading the buckets.  An add either sees the flag or its transaction
+            // is seen here, including adds into buckets created after this point.
+            _timedOut = true;
+            Interlocked.MemoryBarrier();
+
             Bucket? currentBucket = headBucket;
             // It will always have a head.
             do
@@ -478,7 +509,6 @@ namespace System.Transactions
     internal sealed class Bucket
     {
         private const int size = 1024; // A possible design change here is to have this scale dynamically based on load.
-        private bool _timedOut;
         private int _index;
         private readonly InternalTransaction?[] _transactions;
         internal WeakReference<Bucket>? nextBucketWeak;
@@ -488,7 +518,6 @@ namespace System.Transactions
 
         internal Bucket(BucketSet owningSet)
         {
-            _timedOut = false;
             _index = -1;
             _transactions = new InternalTransaction[size];
             _owningSet = owningSet;
@@ -505,8 +534,10 @@ namespace System.Transactions
                 Interlocked.MemoryBarrier(); // This data must be written before the transaction
                                              // could be timed out.
                 _transactions[currentIndex] = tx;
+                Interlocked.MemoryBarrier(); // The transaction must be written before checking whether
+                                             // the set is being timed out.
 
-                if (_timedOut)
+                if (_owningSet.TimedOut)
                 {
                     lock (tx)
                     {
@@ -543,12 +574,8 @@ namespace System.Transactions
             int i;
             int transactionCount = _index;
 
-            _timedOut = true;
-            Interlocked.MemoryBarrier();
-
             for (i = 0; i <= transactionCount && i < size; i++)
             {
-                Debug.Assert(transactionCount == _index, "Index changed timing out transactions");
                 InternalTransaction? tx = _transactions[i];
                 if (tx != null)
                 {
