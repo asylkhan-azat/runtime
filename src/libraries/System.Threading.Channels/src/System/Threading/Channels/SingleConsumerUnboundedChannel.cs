@@ -25,7 +25,7 @@ namespace System.Threading.Channels
         /// at a time; as a result, since this channel supports multiple writers, all writes to the
         /// storage must be synchronized by the channel.
         /// </summary>
-        private readonly TStorage _items; // TODO: see if readonly leads to excessive defensive copying
+        private TStorage _items;
 
         /// <summary>Whether to force continuations to be executed asynchronously from producer writes.</summary>
         private readonly bool _runContinuationsAsynchronously;
