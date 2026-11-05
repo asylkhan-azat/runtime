@@ -26,9 +26,17 @@ namespace System.Threading.Channels
         /// or <see cref="Comparer{T}.Default"/> if the provided comparer is null.
         /// The next item read from the channel will be the element available in the channel with the lowest priority value.
         /// </remarks>
+        /// <exception cref="ArgumentNullException"><paramref name="options"/> is <see langword="null"/>.</exception>
+        /// <exception cref="ArgumentException"><paramref name="options"/> specifies an unsupported backing collection.</exception>
         public static Channel<T> CreateUnboundedPrioritized<T>(UnboundedPrioritizedChannelOptions<T> options)
         {
             ArgumentNullException.ThrowIfNull(options);
+
+            if (options.BackingCollection != ChannelBackingCollection.Queue)
+            {
+                // TODO: is this good thing? Concept of prioritized stack is just wrong, but throwing here feels a bit alien too 
+                throw new ArgumentException(null, nameof(options));
+            }
 
             return new UnboundedPrioritizedChannel<T>(!options.AllowSynchronousContinuations, options.Comparer);
         }

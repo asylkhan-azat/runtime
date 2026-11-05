@@ -11,9 +11,12 @@ namespace System.Threading.Channels
         IEnumerator<T> GetEnumerator();
     }
 
-    internal sealed class DebugEnumeratorDebugView<T>(IDebugEnumerable<T> enumerable)
+    internal class DebugEnumeratorDebugView<T>(IDebugEnumerable<T> enumerable)
     {
         [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
         public T[] Items { get; } = [.. enumerable];
     }
+
+    internal sealed class DebugEnumeratorDebugView<T, TStorage>(IDebugEnumerable<T> enumerable) 
+        : DebugEnumeratorDebugView<T>(enumerable);
 }

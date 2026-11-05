@@ -9,7 +9,7 @@ namespace System.Threading.Channels
         /// <summary>Creates an unbounded channel usable by any number of readers and writers concurrently.</summary>
         /// <returns>The created channel.</returns>
         public static Channel<T> CreateUnbounded<T>() =>
-            new UnboundedChannel<T>(runContinuationsAsynchronously: true);
+            new UnboundedChannel<T, ConcurrentQueueChannelStorage<T>>(runContinuationsAsynchronously: true, new ConcurrentQueueChannelStorage<T>());
 
         /// <summary>Creates an unbounded channel subject to the provided options.</summary>
         /// <typeparam name="T">Specifies the type of data in the channel.</typeparam>
@@ -22,10 +22,14 @@ namespace System.Threading.Channels
 
             if (options.SingleReader)
             {
-                return new SingleConsumerUnboundedChannel<T>(!options.AllowSynchronousContinuations);
+                return options.BackingCollection == ChannelBackingCollection.Stack ?
+                    new SingleConsumerUnboundedChannel<T, SingleConsumerStackChannelStorage<T>>(!options.AllowSynchronousContinuations, new SingleConsumerStackChannelStorage<T>()) :
+                    new SingleConsumerUnboundedChannel<T, SingleConsumerQueueChannelStorage<T>>(!options.AllowSynchronousContinuations, new SingleConsumerQueueChannelStorage<T>());
             }
 
-            return new UnboundedChannel<T>(!options.AllowSynchronousContinuations);
+            return options.BackingCollection == ChannelBackingCollection.Stack ?
+                new UnboundedChannel<T, ConcurrentStackChannelStorage<T>>(!options.AllowSynchronousContinuations, new ConcurrentStackChannelStorage<T>()) :
+                new UnboundedChannel<T, ConcurrentQueueChannelStorage<T>>(!options.AllowSynchronousContinuations, new ConcurrentQueueChannelStorage<T>());
         }
 
         /// <summary>Creates a channel with the specified maximum capacity.</summary>
@@ -61,7 +65,7 @@ namespace System.Threading.Channels
             ArgumentNullException.ThrowIfNull(options);
 
             return
-                options.Capacity > 0 ? new BoundedChannel<T>(options.Capacity, options.FullMode, !options.AllowSynchronousContinuations, itemDropped) :
+                options.Capacity > 0 ? new BoundedChannel<T>(options.Capacity, options.FullMode, !options.AllowSynchronousContinuations, itemDropped, options.BackingCollection) :
                 new RendezvousChannel<T>(options.FullMode, !options.AllowSynchronousContinuations, itemDropped);
         }
     }

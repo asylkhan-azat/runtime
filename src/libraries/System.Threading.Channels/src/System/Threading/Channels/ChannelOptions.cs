@@ -6,6 +6,27 @@ namespace System.Threading.Channels
     /// <summary>Provides options that control the behavior of channel instances.</summary>
     public abstract class ChannelOptions
     {
+        private ChannelBackingCollection _backingCollection;
+
+        /// <summary>Gets or sets the backing collection used to buffer items.</summary>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="value"/> is an invalid enum value.</exception>
+        public ChannelBackingCollection BackingCollection
+        {
+            get => _backingCollection;
+            set
+            {
+                switch (value)
+                {
+                    case ChannelBackingCollection.Queue:
+                    case ChannelBackingCollection.Stack:
+                        _backingCollection = value;
+                        break;
+                    default:
+                        throw new ArgumentOutOfRangeException(nameof(value));
+                }
+            }
+        }
+
         /// <summary>
         /// <code>true</code> if writers to the channel guarantee that there will only ever be at most one write operation
         /// at a time; <code>false</code> if no such constraint is guaranteed.

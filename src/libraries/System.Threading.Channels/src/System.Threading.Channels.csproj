@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFrameworks>$(NetCoreAppCurrent);$(NetCoreAppPrevious);$(NetCoreAppMinimum);netstandard2.1;netstandard2.0;$(NetFrameworkMinimum)</TargetFrameworks>
@@ -17,9 +17,11 @@ System.Threading.Channel&lt;T&gt;</PackageDescription>
     <Compile Include="System\Threading\Channels\BoundedChannel.cs" />
     <Compile Include="System\Threading\Channels\BoundedChannelFullMode.cs" />
     <Compile Include="System\Threading\Channels\Channel.cs" />
+    <Compile Include="System\Threading\Channels\ChannelBackingCollection.cs" />
     <Compile Include="System\Threading\Channels\ChannelClosedException.cs" />
     <Compile Include="System\Threading\Channels\ChannelOptions.cs" />
     <Compile Include="System\Threading\Channels\ChannelReader.cs" />
+    <Compile Include="System\Threading\Channels\ChannelStorage.cs" />
     <Compile Include="System\Threading\Channels\ChannelUtilities.cs" />
     <Compile Include="System\Threading\Channels\ChannelWriter.cs" />
     <Compile Include="System\Threading\Channels\Channel_1.cs" />

@@ -27,6 +27,11 @@ namespace System.Threading.Channels
         public static System.Threading.Channels.Channel<T> CreateUnbounded<T>() { throw null; }
         public static System.Threading.Channels.Channel<T> CreateUnbounded<T>(System.Threading.Channels.UnboundedChannelOptions options) { throw null; }
     }
+    public enum ChannelBackingCollection
+    {
+        Queue = 0,
+        Stack = 1,
+    }
     public partial class ChannelClosedException : System.InvalidOperationException
     {
         public ChannelClosedException() { }
@@ -38,6 +43,7 @@ namespace System.Threading.Channels
     {
         protected ChannelOptions() { }
         public bool AllowSynchronousContinuations { get { throw null; } set { } }
+        public System.Threading.Channels.ChannelBackingCollection BackingCollection { get { throw null; } set { } }
         public bool SingleReader { get { throw null; } set { } }
         public bool SingleWriter { get { throw null; } set { } }
     }

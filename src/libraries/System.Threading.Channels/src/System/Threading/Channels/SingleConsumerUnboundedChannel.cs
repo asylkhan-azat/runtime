@@ -1,7 +1,6 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
@@ -14,17 +13,20 @@ namespace System.Threading.Channels
     /// of writers but at most a single reader at a time.
     /// </summary>
     [DebuggerDisplay("Items = {ItemsCountForDebugger}, Closed = {ChannelIsClosedForDebugger}")]
-    [DebuggerTypeProxy(typeof(DebugEnumeratorDebugView<>))]
-    internal sealed class SingleConsumerUnboundedChannel<T> : Channel<T>, IDebugEnumerable<T>
+    [DebuggerTypeProxy(typeof(DebugEnumeratorDebugView<,>))]
+    internal sealed class SingleConsumerUnboundedChannel<T, TStorage> : Channel<T>, IDebugEnumerable<T>
+        where TStorage : struct, IChannelStorage<T>
     {
         /// <summary>Task that indicates the channel has completed.</summary>
         private readonly TaskCompletionSource _completion;
+
         /// <summary>
-        /// A concurrent queue to hold the items for this channel.  The queue itself supports at most
-        /// one writer and one reader at a time; as a result, since this channel supports multiple writers,
-        /// all write access to the queue must be synchronized by the channel.
+        /// Storage for the items in this channel. It may require at most one writer and one reader
+        /// at a time; as a result, since this channel supports multiple writers, all writes to the
+        /// storage must be synchronized by the channel.
         /// </summary>
-        private readonly SingleProducerSingleConsumerQueue<T> _items = new SingleProducerSingleConsumerQueue<T>();
+        private readonly TStorage _items; // TODO: see if readonly leads to excessive defensive copying
+
         /// <summary>Whether to force continuations to be executed asynchronously from producer writes.</summary>
         private readonly bool _runContinuationsAsynchronously;
 
@@ -39,8 +41,10 @@ namespace System.Threading.Channels
 
         /// <summary>Initialize the channel.</summary>
         /// <param name="runContinuationsAsynchronously">Whether to force continuations to be executed asynchronously.</param>
-        internal SingleConsumerUnboundedChannel(bool runContinuationsAsynchronously)
+        /// <param name="items">The storage used for buffered items.</param>
+        internal SingleConsumerUnboundedChannel(bool runContinuationsAsynchronously, TStorage items)
         {
+            _items = items;
             _runContinuationsAsynchronously = runContinuationsAsynchronously;
             _completion = new TaskCompletionSource(runContinuationsAsynchronously ? TaskCreationOptions.RunContinuationsAsynchronously : TaskCreationOptions.None);
 
@@ -49,14 +53,14 @@ namespace System.Threading.Channels
         }
 
         [DebuggerDisplay("Items = {ItemsCountForDebugger}")]
-        [DebuggerTypeProxy(typeof(DebugEnumeratorDebugView<>))]
+        [DebuggerTypeProxy(typeof(DebugEnumeratorDebugView<,>))]
         private sealed class UnboundedChannelReader : ChannelReader<T>, IDebugEnumerable<T>
         {
-            internal readonly SingleConsumerUnboundedChannel<T> _parent;
+            internal readonly SingleConsumerUnboundedChannel<T, TStorage> _parent;
             private readonly BlockedReadAsyncOperation<T> _readerSingleton;
             private readonly WaitingReadAsyncOperation _waiterSingleton;
 
-            internal UnboundedChannelReader(SingleConsumerUnboundedChannel<T> parent)
+            internal UnboundedChannelReader(SingleConsumerUnboundedChannel<T, TStorage> parent)
             {
                 _parent = parent;
                 _readerSingleton = new BlockedReadAsyncOperation<T>(parent._runContinuationsAsynchronously, pooled: true);
@@ -79,7 +83,7 @@ namespace System.Threading.Channels
                     return new ValueTask<T>(item);
                 }
 
-                SingleConsumerUnboundedChannel<T> parent = _parent;
+                SingleConsumerUnboundedChannel<T, TStorage> parent = _parent;
 
                 BlockedReadAsyncOperation<T>? oldBlockedReader, newBlockedReader;
                 lock (parent.SyncObj)
@@ -122,8 +126,8 @@ namespace System.Threading.Channels
 
             public override bool TryRead([MaybeNullWhen(false)] out T item)
             {
-                SingleConsumerUnboundedChannel<T> parent = _parent;
-                if (parent._items.TryDequeue(out item))
+                SingleConsumerUnboundedChannel<T, TStorage> parent = _parent;
+                if (parent._items.TryTake(out item))
                 {
                     if (parent._doneWriting is not null && parent._items.IsEmpty)
                     {
@@ -150,7 +154,7 @@ namespace System.Threading.Channels
                     return new ValueTask<bool>(true);
                 }
 
-                SingleConsumerUnboundedChannel<T> parent = _parent;
+                SingleConsumerUnboundedChannel<T, TStorage> parent = _parent;
                 WaitingReadAsyncOperation? oldWaitingReader = null, newWaitingReader;
                 lock (parent.SyncObj)
                 {
@@ -200,11 +204,11 @@ namespace System.Threading.Channels
         }
 
         [DebuggerDisplay("Items = {ItemsCountForDebugger}")]
-        [DebuggerTypeProxy(typeof(DebugEnumeratorDebugView<>))]
+        [DebuggerTypeProxy(typeof(DebugEnumeratorDebugView<,>))]
         private sealed class UnboundedChannelWriter : ChannelWriter<T>, IDebugEnumerable<T>
         {
-            internal readonly SingleConsumerUnboundedChannel<T> _parent;
-            internal UnboundedChannelWriter(SingleConsumerUnboundedChannel<T> parent) => _parent = parent;
+            internal readonly SingleConsumerUnboundedChannel<T, TStorage> _parent;
+            internal UnboundedChannelWriter(SingleConsumerUnboundedChannel<T, TStorage> parent) => _parent = parent;
 
             public override bool TryComplete(Exception? error)
             {
@@ -212,7 +216,7 @@ namespace System.Threading.Channels
                 WaitingReadAsyncOperation? waitingReader = null;
                 bool completeTask = false;
 
-                SingleConsumerUnboundedChannel<T> parent = _parent;
+                SingleConsumerUnboundedChannel<T, TStorage> parent = _parent;
                 lock (parent.SyncObj)
                 {
                     // If we're already marked as complete, there's nothing more to do.
@@ -277,7 +281,7 @@ namespace System.Threading.Channels
 
             public override bool TryWrite(T item)
             {
-                SingleConsumerUnboundedChannel<T> parent = _parent;
+                SingleConsumerUnboundedChannel<T, TStorage> parent = _parent;
                 while (true) // in case a reader was canceled and we need to try again
                 {
                     BlockedReadAsyncOperation<T>? blockedReader = null;
@@ -300,7 +304,7 @@ namespace System.Threading.Channels
                         }
                         else
                         {
-                            parent._items.Enqueue(item);
+                            parent._items.Add(item);
 
                             waitingReader = parent._waitingReader;
                             if (waitingReader is null)
@@ -358,7 +362,7 @@ namespace System.Threading.Channels
             IEnumerator<T> IDebugEnumerable<T>.GetEnumerator() => _parent._items.GetEnumerator();
         }
 
-        private object SyncObj => _items;
+        private object SyncObj => _completion;
 
         private Action<object?, CancellationToken> CancellationCallbackDelegate =>
             field ??= (state, cancellationToken) =>
@@ -391,7 +395,7 @@ namespace System.Threading.Channels
                                     break;
                             }
                         }
-                    }, new KeyValuePair<SingleConsumerUnboundedChannel<T>, AsyncOperation>(this, op));
+                    }, new KeyValuePair<SingleConsumerUnboundedChannel<T, TStorage>, AsyncOperation>(this, op));
                 }
             };
 

@@ -16,6 +16,9 @@ namespace System.Threading.Channels
         /// <summary>The mode used when the channel hits its bound.</summary>
         private readonly BoundedChannelFullMode _mode;
 
+        /// <summary>The backing collection behavior used to buffer items.</summary>
+        private readonly ChannelBackingCollection _backingCollection;
+
         /// <summary>The delegate that will be invoked when the channel hits its bound and an item is dropped from the channel.</summary>
         private readonly Action<T>? _itemDropped;
 
@@ -51,12 +54,14 @@ namespace System.Threading.Channels
         /// <param name="mode">The mode used when writing to a full channel.</param>
         /// <param name="runContinuationsAsynchronously">Whether to force continuations to be executed asynchronously.</param>
         /// <param name="itemDropped">Delegate that will be invoked when an item is dropped from the channel. See <see cref="BoundedChannelFullMode"/>.</param>
-        internal BoundedChannel(int bufferedCapacity, BoundedChannelFullMode mode, bool runContinuationsAsynchronously, Action<T>? itemDropped)
+        /// <param name="backingCollection">The backing collection behavior used to buffer items.</param>
+        internal BoundedChannel(int bufferedCapacity, BoundedChannelFullMode mode, bool runContinuationsAsynchronously, Action<T>? itemDropped, ChannelBackingCollection backingCollection = ChannelBackingCollection.Queue)
         {
             Debug.Assert(bufferedCapacity > 0);
 
             _bufferedCapacity = bufferedCapacity;
             _mode = mode;
+            _backingCollection = backingCollection;
             _runContinuationsAsynchronously = runContinuationsAsynchronously;
             _itemDropped = itemDropped;
             _completion = new TaskCompletionSource(runContinuationsAsynchronously ? TaskCreationOptions.RunContinuationsAsynchronously : TaskCreationOptions.None);
@@ -135,7 +140,9 @@ namespace System.Threading.Channels
                     // Peek at an item if there is one.
                     if (!parent._items.IsEmpty)
                     {
-                        item = parent._items.PeekHead();
+                        item = parent._backingCollection == ChannelBackingCollection.Stack ?
+                            parent._items.PeekTail() :
+                            parent._items.PeekHead();
                         return true;
                     }
                 }
@@ -242,7 +249,9 @@ namespace System.Threading.Channels
                 Debug.Assert(Monitor.IsEntered(parent.SyncObj));
 
                 // Dequeue an item.
-                T item = parent._items.DequeueHead();
+                T item = parent._backingCollection == ChannelBackingCollection.Stack ?
+                    parent._items.DequeueTail() :
+                    parent._items.DequeueHead();
 
                 if (parent._doneWriting is not null)
                 {
